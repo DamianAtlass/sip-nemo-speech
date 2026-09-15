@@ -178,7 +178,7 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin, InterCTCMi
                     self.cfg.decoding.preserve_alignments = self.cfg.decoding.get('preserve_alignments', False)
                 self.change_decoding_strategy(self.cfg.decoding, verbose=False)
 
-        return super().transcribe(
+        result = super().transcribe(
             audio=audio,
             batch_size=batch_size,
             return_hypotheses=return_hypotheses,
@@ -189,6 +189,29 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin, InterCTCMi
             timestamps=timestamps,
             override_config=override_config,
         )
+        # add y_sequence_text and idx_chars_per_word to hypothesis
+        for hyp in result:
+            y_seq_text = hyp.y_sequence_text
+            words_idx = []
+            word = []
+
+            for i, t in enumerate(y_seq_text):
+                if t =="BLANK":
+                    continue
+
+                if t[0]=="▁":
+                    if word != []:
+                        words_idx.append(word)
+                    word = [i]
+                else:
+                    word.append(i)
+
+            if word != []:
+                words_idx.append(word)
+
+            hyp.idx_chars_per_word = words_idx
+
+        return result
 
     def change_vocabulary(self, new_vocabulary: List[str], decoding_cfg: Optional[DictConfig] = None):
         """

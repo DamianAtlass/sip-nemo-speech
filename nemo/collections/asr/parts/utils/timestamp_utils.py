@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import re
+from copy import copy
 from typing import Callable, Dict, List, Optional, Set, Union
 
 import numpy as np
@@ -110,6 +111,7 @@ def get_words_offsets(
     # Built tokens should be list here as when dealing with wpe tokenizer,
     # ids should be decoded together to ensure tokens starting with ## are not split
     built_tokens = []
+    built_token_tracking_list = []
     condition_for_word_start = define_word_start_condition()
 
     # For every collapsed sub-word token
@@ -117,7 +119,7 @@ def get_words_offsets(
 
         char_text = char_offset['char']
         char_token = char_token_offset['char']
-
+        char_text_token = char_offset['tokens']
         curr_punctuation = (
             supported_punctuation and char_text in supported_punctuation and char_text != word_delimiter_char
         )
@@ -143,6 +145,7 @@ def get_words_offsets(
                         "word": decode_tokens_to_str(built_tokens),
                         "start_offset": char_offsets[previous_token_index]["start_offset"],
                         "end_offset": char_offsets[i - 1]["end_offset"],
+                        "tokens": built_token_tracking_list
                     }
                 )
 
@@ -153,9 +156,11 @@ def get_words_offsets(
 
             # Prepare new built_tokens
             built_tokens = []
+            built_token_tracking_list = []
 
             if char_text != word_delimiter_char:
                 built_tokens.append(char_token)
+                built_token_tracking_list.extend([char_text_token] * char_offset["token_repetition"])
                 previous_token_index = i
 
         # If the token is a punctuation mark and there is no built word, then the previous word is complete
@@ -171,7 +176,9 @@ def get_words_offsets(
         elif curr_punctuation and built_tokens:
             if built_tokens[-1] in [' ', "_", "▁"]:
                 built_tokens = built_tokens[:-1]
+                built_token_tracking_list = built_token_tracking_list[:-1]
             built_tokens.append(char_token)
+            built_token_tracking_list.extend([char_text_token] * char_offset["token_repetition"])
         else:
             # If the token does not contain any sub-word start mark, then the sub-word has not completed yet
             # Append to current built word.
@@ -180,6 +187,8 @@ def get_words_offsets(
             if not built_tokens:
                 previous_token_index = i
             built_tokens.append(char_token)
+            built_token_tracking_list.extend([char_text_token] * char_offset["token_repetition"])
+
 
     # Inject the start offset of the first token to word offsets
     # This is because we always skip the delay the injection of the first sub-word due to the loop
@@ -193,6 +202,7 @@ def get_words_offsets(
                     "word": decode_tokens_to_str(built_tokens),
                     "start_offset": char_offsets[0]["start_offset"],
                     "end_offset": char_offsets[-1]["end_offset"],
+                    "tokens": built_token_tracking_list,
                 }
             )
             if "start" in char_offsets[0]:
@@ -214,6 +224,7 @@ def get_words_offsets(
                     "word": decode_tokens_to_str(built_tokens),
                     "start_offset": char_offsets[previous_token_index]["start_offset"],
                     "end_offset": char_offsets[-1]["end_offset"],
+                    "tokens": built_token_tracking_list,
                 }
             )
             if "start" in char_offset:
@@ -257,12 +268,14 @@ def get_segment_offsets(
 
     segment_offsets = []
     segment_words = []
+    segment_tokens = []
     previous_word_index = 0
 
     # For every offset word
     for i, offset in enumerate(word_offsets):
 
         word = offset['word']
+        word_tokens = offset['tokens']
         if segment_gap_threshold and segment_words:
             gap_between_words = offset['start_offset'] - word_offsets[i - 1]['end_offset']
 
@@ -272,6 +285,7 @@ def get_segment_offsets(
                         "segment": ' '.join(segment_words),
                         "start_offset": word_offsets[previous_word_index]["start_offset"],
                         "end_offset": word_offsets[i - 1]["end_offset"],
+                        "tokens": copy(segment_tokens)
                     }
                 )
 
@@ -281,18 +295,21 @@ def get_segment_offsets(
                     segment_offsets[-1]["end"] = word_offsets[i - 1]["end"]
 
                 segment_words = [word]
+                segment_tokens = [word_tokens]
                 previous_word_index = i
                 continue
 
         # check if the word ends with any delimeter token or the word itself is a delimeter
         elif word and (word[-1] in segment_delimiter_tokens or word in segment_delimiter_tokens):
             segment_words.append(word)
+            segment_tokens.extend(word_tokens)
             if segment_words:
                 segment_offsets.append(
                     {
                         "segment": ' '.join(segment_words),
                         "start_offset": word_offsets[previous_word_index]["start_offset"],
                         "end_offset": offset["end_offset"],
+                        "tokens": copy(segment_tokens)
                     }
                 )
 
@@ -302,10 +319,12 @@ def get_segment_offsets(
                     segment_offsets[-1]["end"] = offset["end"]
 
             segment_words = []
+            segment_tokens = []
             previous_word_index = i + 1
             continue
 
         segment_words.append(word)
+        segment_tokens.extend(word_tokens)
 
     if segment_words:
         start_offset = word_offsets[previous_word_index]["start_offset"]
@@ -314,6 +333,7 @@ def get_segment_offsets(
                 "segment": ' '.join(segment_words),
                 "start_offset": start_offset,
                 "end_offset": word_offsets[-1]["end_offset"],
+                "tokens": copy(segment_tokens)
             }
         )
 
@@ -323,6 +343,7 @@ def get_segment_offsets(
             segment_offsets[-1]["end"] = word_offsets[-1]["end"]
 
     segment_words.clear()
+    segment_tokens.clear()
 
     return segment_offsets
 

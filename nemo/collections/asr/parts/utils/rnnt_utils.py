@@ -118,6 +118,10 @@ class Hypothesis:
     non_blank_step_confidence_precomputed: list[float] | None = None
     xatt_scores: Optional[List[torch.Tensor]] = None
 
+    y_sequence_text: List[str] = None
+    idx_chars_per_word: List[int] = None
+    token_repetitions = list[int]
+
     @property
     def non_blank_frame_confidence(self) -> List[float]:
         """Get per-frame confidence for non-blank tokens according to self.timestamp

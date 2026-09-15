@@ -517,6 +517,20 @@ class AbstractCTCDecoding(ConfidenceMixin):
                     for hyp_idx in range(len(hypotheses)):
                         hypotheses[hyp_idx] = self.compute_ctc_timestamps(hypotheses[hyp_idx], timestamp_type)
 
+            # add a decoded sequence to the hypothesis
+            for hyp in hypotheses:
+                y_sequence_text = []
+                non_blank_tokens = [o for o in hyp.y_sequence if o!=1024]
+                for y in hyp.y_sequence:
+                    y = y.item()
+                    if y == 1024:  # blank:
+                        token = "BLANK"
+                    else:
+                        token = self.decode_ids_to_tokens([y])[0]
+                    y_sequence_text.append(token)
+                assert [o for o in y_sequence_text if o!="BLANK"] == self.decode_ids_to_tokens(non_blank_tokens)
+                hyp.y_sequence_text = y_sequence_text
+
             if return_hypotheses:
                 return hypotheses
 
@@ -580,7 +594,7 @@ class AbstractCTCDecoding(ConfidenceMixin):
                 decoded_prediction = prediction[prediction != self.blank_id].tolist()
                 token_lengths = [1] * len(decoded_prediction)  # preserve number of repetitions per token
                 token_repetitions = [1] * len(decoded_prediction)  # preserve number of repetitions per token
-
+            hypotheses_list[ind].token_repetitions = token_repetitions
             # De-tokenize the integer tokens; if not computing timestamps
             if self.compute_timestamps is True:
                 # keep the original predictions, wrap with the number of repetitions per token
@@ -726,15 +740,24 @@ class AbstractCTCDecoding(ConfidenceMixin):
         # char_offsets contains chars as strings, encoded_char_offsets contains tokens corresponding to chars.
         # e.g. in char_offsets, char_offsets[i]["char"] = "token", in encoded_char_offsets, encoded_char_offsets[i]["char"] = "_token"
         # These 2 dictionaries are used to get the word offsets.
+
+        assert len(hypothesis.token_repetitions) == len(hypothesis.text)
+
         for i, char in enumerate(hypothesis.text):
             encoded_char_offsets[i]["char"] = self.decode_ids_to_tokens([char])[0]
             char_offsets[i]["char"] = self.decode_tokens_to_str([encoded_char_offsets[i]["char"]])
+
+            # add original text_token to dicts
+            tr = hypothesis.token_repetitions[i]
+            char_offsets[i]["tokens"] = encoded_char_offsets[i]["char"]
+            char_offsets[i]["token_repetition"] = tr
 
         encoded_char_offsets, char_offsets = self._refine_timestamps(
             encoded_char_offsets=encoded_char_offsets,
             char_offsets=char_offsets,
             supported_punctuation=self.supported_punctuation,
         )
+        assert all([isinstance(o["tokens"], str) for o in char_offsets])
 
         # retrieve word offsets from character offsets
         word_offsets = None
@@ -747,6 +770,7 @@ class AbstractCTCDecoding(ConfidenceMixin):
                 tokenizer_type=self.tokenizer_type,
                 decode_tokens_to_str=self.decode_tokens_to_str,
             )
+        assert all([isinstance(o["tokens"], list) for o in word_offsets])
 
         segment_offsets = None
         if timestamp_type in ['segment', 'all']:
@@ -780,6 +804,9 @@ class AbstractCTCDecoding(ConfidenceMixin):
 
         # Convert the token indices to text
         hypothesis.text = self.decode_tokens_to_str_with_strip_punctuation(hypothesis.text)
+
+        hypothesis.y_sequence_text = [s for sublist in hypothesis.timestamp["segment"] for s in sublist["tokens"]]
+        validate_tracked_tokens(hypothesis)
 
         return hypothesis
 
@@ -1385,3 +1412,17 @@ class CTCDecodingConfig:
 @dataclass
 class CTCBPEDecodingConfig(CTCDecodingConfig):
     pass
+
+
+def validate_tracked_tokens(hypothesis: Hypothesis):
+    non_blank_tokens = [o.item() for o in hypothesis.y_sequence if o != 1024]
+    assert len(non_blank_tokens) == len(hypothesis.y_sequence_text)
+
+    for v in ["char", "word", "segment"]:
+
+        entries = hypothesis.timestamp[v]
+
+        expected_tokens = []
+        for e in entries:
+            expected_tokens.extend([e["tokens"]]*e["token_repetition"] if v == "char" else e["tokens"])
+        assert len(non_blank_tokens) == len(expected_tokens)
